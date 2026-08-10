@@ -149,7 +149,7 @@ shumul(NODE *p, int shape)
 
 /*
  * setbin, setasg, setuni, setorder: instruction ordering hooks.
- * For Z8001 we rely entirely on the table and don't need special handling.
+ * For Z8001 we rely on the table except for setorder, below.
  */
 int
 setbin(NODE *p)
@@ -169,9 +169,46 @@ setuni(NODE *p, int cookie)
 	return 0;
 }
 
+/*
+ * The MUL/DIV/MOD table entries pin their left operand (and result) to
+ * r1 (word) / rr2 (long) and clobber r0 / rr0.  Helper calls (function
+ * calls, the float pack/unpack SCONVs, the ZF float ops) clobber the
+ * same registers.  If the RIGHT subtree contains such an op, left-first
+ * evaluation stages the left value in the pinned register and the right
+ * subtree then tramples it: (x-a)/(19*w) divided the divisor by itself.
+ * Force right-first evaluation there; the right's result is then live
+ * while the left is evaluated, so the allocator keeps it clear of the
+ * pinned registers.
+ */
+static int
+clobpair(NODE *p)
+{
+	int o = p->n_op;
+
+	if (o == MUL || o == DIV || o == MOD || callop(o))
+		return 1;
+	if (o == SCONV && (p->n_type == FLOAT || p->n_type == DOUBLE ||
+	    p->n_left->n_type == FLOAT || p->n_left->n_type == DOUBLE))
+		return 1;
+	switch (optype(o)) {
+	case BITYPE:
+		return clobpair(p->n_left) || clobpair(p->n_right);
+	case UTYPE:
+		return clobpair(p->n_left);
+	}
+	return 0;
+}
+
 int
 setorder(NODE *p)
 {
+	int o = p->n_op;
+
+	if ((o == MUL || o == DIV || o == MOD) &&
+	    optype(p->n_right->n_op) != LTYPE && clobpair(p->n_right)) {
+		p->n_su |= DORIGHT;
+		return 1;
+	}
 	return 0;
 }
 
