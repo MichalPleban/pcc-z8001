@@ -442,6 +442,18 @@ clocal(NODE *p)
 		 * above (char narrowing) to the new node.
 		 */
 		l = p->n_left;
+		if (l->n_op == COMOP) {
+			/*
+			 * !(a, b) is (a, !b): keep the NOT on b, where the
+			 * relop folding below can see it.  Turning the whole
+			 * comma into EQ(COMOP, 0) lost the negation on the
+			 * way to the branch: `if (f(), x != c)' took the
+			 * wrong arm (found by the Sept 2026 lex work).
+			 */
+			p->n_left = l->n_right;
+			l->n_right = clocal(p);
+			return l;
+		}
 		if (l->n_op >= EQ && l->n_op <= UGT) {
 			static int negrel[] = { NE, EQ, GT, GE, LT, LE,
 			    UGT, UGE, ULT, ULE };
